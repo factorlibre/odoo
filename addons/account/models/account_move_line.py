@@ -1839,7 +1839,7 @@ class AccountMoveLine(models.Model):
                 partial_credit_amount = min(partial_credit_amount, -remaining_credit_amount)
             else:
                 partial_credit_amount = 0.0
-            partial_amount = min(partial_debit_amount, partial_credit_amount)
+            partial_amount = min(remaining_debit_amount, -remaining_credit_amount)
 
             # Compute the partial amount expressed in foreign currency.
             # Take care to handle the case when a line expressed in company currency is mimicking the foreign
@@ -1847,11 +1847,16 @@ class AccountMoveLine(models.Model):
             if debit_vals['currency'] == company_currency:
                 partial_debit_amount_currency = partial_amount
             else:
-                partial_debit_amount_currency = min_recon_amount
+                partial_debit_amount_currency = partial_amount * (credit_rate or 1)
             if credit_vals['currency'] == company_currency:
                 partial_credit_amount_currency = partial_amount
             else:
-                partial_credit_amount_currency = min_recon_amount
+                partial_credit_amount_currency = partial_amount * (debit_rate or 1)
+
+            partial_debit_amount = partial_amount
+            partial_credit_amount = partial_amount
+            debit_fully_matched = (partial_amount == remaining_debit_amount)
+            credit_fully_matched = (partial_amount == -remaining_credit_amount)
 
         # Computation of the partial exchange difference. You can skip this part using the
         # `no_exchange_difference` context key (when reconciling an exchange difference for example).
@@ -2145,9 +2150,30 @@ class AccountMoveLine(models.Model):
         exchange_move._post(soft=False)
 
         # Reconcile lines to the newly created exchange difference journal entry by creating more partials.
+        partials_vals_list = []
         for source_line, sequence in exchange_diff_vals['to_reconcile']:
             exchange_diff_line = exchange_move.line_ids[sequence]
-            (exchange_diff_line + source_line).with_context(no_exchange_difference=True).reconcile()
+            if source_line.company_currency_id.is_zero(source_line.amount_residual):
+                exchange_field = "amount_residual_currency"
+            else:
+                exchange_field = "amount_residual"
+
+            if exchange_diff_line[exchange_field] > 0.0:
+                debit_line = exchange_diff_line
+                credit_line = source_line
+            else:
+                debit_line = source_line
+                credit_line = exchange_diff_line
+
+            partials_vals_list.append({
+                "amount": abs(source_line.amount_residual),
+                "debit_amount_currency": abs(debit_line.amount_residual_currency),
+                "credit_amount_currency": abs(credit_line.amount_residual_currency),
+                "debit_move_id": debit_line.id,
+                "credit_move_id": credit_line.id,
+            })
+
+        self.env["account.partial.reconcile"].create(partials_vals_list)
 
         return exchange_move
 
