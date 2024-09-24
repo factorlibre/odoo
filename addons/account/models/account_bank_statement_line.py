@@ -234,6 +234,12 @@ class AccountBankStatementLine(models.Model):
                     current_running_balance += amount
                 if record_by_id.get(st_line_id):
                     record_by_id[st_line_id].running_balance = current_running_balance
+                elif filter(lambda e: e._origin.id == st_line_id, record_by_id.values()):
+                    filter_record = filter(
+                        lambda e: e._origin.id == st_line_id, record_by_id.values()
+                    )
+                    for rec in filter_record:
+                        rec.running_balance = current_running_balance
 
     @api.depends('date', 'sequence')
     def _compute_internal_index(self):
